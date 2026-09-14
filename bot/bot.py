@@ -41,6 +41,9 @@ REVERSE_PLAN = True
 # partidas, IC95 [31,9%, 39,7%]. Se deja a 0 como recordatorio de que no ayuda.
 TIE_JITTER = 0.0
 
+# Gastar siempre los 3 puntos: si el plan no los consume, extender la red.
+FILL_IDLE_PAINT = True
+
 PAINT_PER_TURN = 3
 DISRUPT_PER_TURN = 1
 INSTABILITY_THRESHOLD = 4
@@ -48,6 +51,9 @@ MAX_TURNS = 100
 
 PLAINS, RIVER, MOUNTAIN, POI = 0, 1, 2, 3
 COST = (1, 2, 3, 3)
+# Coste solo para ELEGIR ruta: rio y montana penalizados por encima de su precio
+# real, para rodearlos en vez de pagarlos. Ver Board.route_cost.
+TERRAIN_AVOID = (1, 3, 5, 5)
 
 TRACK_NONE, TRACK_NEUTRAL = -1, 2
 INF = float("inf")
@@ -129,6 +135,28 @@ class Board:
             self.region_has_town[self.region[t.idx]] = True
 
         self.cost = [COST[terrain[i]] for i in range(self.n)]
+
+        # Coste para ELEGIR ruta (no es lo que se paga). Penaliza rio y montana
+        # mas de lo que cuestan: el bot nº1 de la liga construyo 102 celdas en
+        # llanura y solo 6 en rio y 2 en montana. Rodear sale mejor que pagar,
+        # sobre todo con el tablero desapareciendo por el inking.
+        self.route_cost = [TERRAIN_AVOID[terrain[i]] for i in range(self.n)]
+
+        # corridor[r]: cuantas celdas de la region r caen en el trazado directo
+        # entre towns que se desean conectar. Aproxima "por donde tendra que
+        # pasar el rival", y sirve para sembrar inestabilidad antes de que
+        # construya nada.
+        self.corridor = [0] * self.n_regions
+        for (a, bb) in self.pairs:
+            x0, y0 = towns[a].x, towns[a].y
+            x1, y1 = towns[bb].x, towns[bb].y
+            x, y = x0, y0
+            while x != x1:
+                x += 1 if x1 > x else -1
+                self.corridor[self.region[y * w + x]] += 1
+            while y != y1:
+                y += 1 if y1 > y else -1
+                self.corridor[self.region[y * w + x]] += 1
 
     def xy(self, i):
         return i % self.w, i // self.w
@@ -284,10 +312,12 @@ class Rules:
             if dist[s] != 0:
                 dist[s] = 0
                 heappush(pq, (0, s))
+        done = [False] * b.n
         while pq:
             d, u = heappop(pq)
-            if d > dist[u]:
+            if done[u]:
                 continue
+            done[u] = True          # nodo cerrado: no se vuelve a relajar nunca
             for v in b.nb[u]:
                 if st.inked[b.region[v]]:
                     continue
@@ -296,9 +326,9 @@ class Rules:
                 if st.passable(v):
                     w = 0
                 else:
-                    w = b.cost[v] + TIE_JITTER * ((v * 2654435761) % 97) * (1 + b.my_id)
+                    w = b.route_cost[v]
                 nd = d + w
-                if nd < dist[v]:
+                if not done[v] and nd < dist[v]:
                     dist[v] = nd
                     par[v] = u
                     heappush(pq, (nd, v))
@@ -519,61 +549,66 @@ class NoDisrupt(DisruptPolicy):
     name = "none"
 
 
-class ValueDisrupt(DisruptPolicy):
+class PreemptiveDisrupt(DisruptPolicy):
     """
-    1 punto de disrupcion por turno, hacen falta 4 en la MISMA region.
-    Por eso la politica es pegajosa: se fija un objetivo y se machaca hasta
-    inkearlo.
+    Politica copiada del comportamiento observado en el bot nº1 de la liga
+    (Saelyos), leyendo su stdout real de una partida del arena.
 
-    Seleccion: region sin town, no inked, con tracks del rival, maximizando
-      2*(puntos/turno que pierde el rival) - (puntos/turno que pierdo yo)
-    Si no hay ninguna con tracks enemigos no se hace nada  -> en Wood 2 (el boss
-    hace WAIT) esta politica nunca se activa, que es justo lo que queremos.
+    Hace dos cosas que la version anterior NO hacia, y ambas resultaron caras:
+
+    1. Disrupta DESDE EL TURNO 1, haya o no tracks enemigos. La inestabilidad se
+       acumula para siempre, asi que un punto puesto pronto madura justo a tiempo
+       de borrar lo que el rival construya despues. Esperar a ver sus tracks es
+       llegar tarde y tirar los primeros puntos, que son los mas valiosos.
+    2. REPARTE entre varias regiones en vez de machacar una. Deja varias
+       "cebadas" en inestabilidad 3 y remata la que de verdad interese, que puede
+       decidirse un turno antes de inkear.
+
+    Objetivo temprano: los corredores por donde tendran que pasar las conexiones,
+    evitando aquellos donde estamos construyendo nosotros.
+    Objetivo tardio: donde el rival puntua mas y nosotros menos.
     """
-    name = "value"
-
-    def __init__(self):
-        self.target = None
+    name = "preemptive"
 
     def choose(self, st):
         b = st.board
-        if not st.any_foe_track():
-            self.target = None
-            return None
+        # Sin tiempo material para completar un inkeo nuevo: solo rematar los ya
+        # cebados, si queda alguno a 3.
+        last_chance = st.turns_left() < INSTABILITY_THRESHOLD
 
-        # no da tiempo a completar un inkeo nuevo al final de la partida
-        if st.turns_left() < INSTABILITY_THRESHOLD:
-            if self.target is None:
-                return None
-
-        if self.target is not None and self._still_good(st, self.target):
-            return self.target
-
-        best, best_score = None, 0.0
+        best, best_score = None, -1e9
         for r in range(b.n_regions):
             if b.region_has_town[r] or st.inked[r]:
                 continue
-            foe_v = my_v = foe_tracks = 0
+            inst = st.instability[r]
+            if inst >= INSTABILITY_THRESHOLD:
+                continue
+
+            foe_v = my_v = 0
             for i in b.region_cells[r]:
                 if st.foes(i):
-                    foe_tracks += 1
                     foe_v += 1 + st.act_count[i]
                 elif st.mine(i):
                     my_v += 1 + st.act_count[i]
-            if foe_tracks == 0:
-                continue
-            # lo ya invertido por cualquiera acerca el inkeo: cuenta a favor
-            score = 2.0 * foe_v - my_v + 0.5 * st.instability[r]
+
+            if last_chance and inst < INSTABILITY_THRESHOLD - 1:
+                continue            # ya no llegaria a 4
+
+            # Valor de rematar ahora vs seguir cebando. El corredor solo cuenta
+            # mientras no haya informacion mejor (tracks reales sobre el terreno).
+            score = 2.0 * foe_v - 1.5 * my_v + 0.15 * b.corridor[r]
+            if inst == INSTABILITY_THRESHOLD - 1:
+                # a un punto de inkear: solo rematar si compensa de verdad
+                if foe_v <= my_v:
+                    score -= 50.0
+                else:
+                    score += 10.0
+            score += 0.4 * inst     # aprovechar lo ya invertido por cualquiera
+
             if score > best_score:
                 best_score, best = score, r
 
-        self.target = best
         return best
-
-    def _still_good(self, st, r):
-        if st.inked[r] or st.board.region_has_town[r]:
-            return False
-        return any(st.foes(i) for i in st.board.region_cells[r])
 
 
 # --------------------------------------------------------------------------
@@ -588,6 +623,32 @@ class Agent:
         self.spent = 0
         self.last_phase = None
         self.was_idle = False
+
+    def _frontier(self, st, placed):
+        """
+        Celdas libres pegadas a nuestra red, ordenadas por lo prometedoras que
+        son: primero las baratas y las que estan en corredores muy transitados,
+        y se descartan las regiones que ya estan a punto de inkearse.
+        """
+        b = st.board
+        seen = set()
+        out = []
+        for i in range(b.n):
+            if st.track[i] != b.my_id and b.town_at[i] == -1:
+                continue
+            for v in b.nb[i]:
+                if v in seen or v in placed or not st.buildable(v):
+                    continue
+                seen.add(v)
+                r = b.region[v]
+                # Una region a punto de inkearse es mal sitio, pero NO es motivo
+                # para no gastar: la pintura caduca al acabar el turno, asi que
+                # una celda que quiza se borre siempre vale mas que un punto
+                # tirado. Se penaliza para dejarla la ultima, no se descarta.
+                risk = 12.0 if st.instability[r] >= INSTABILITY_THRESHOLD - 1 else 0.0
+                out.append((b.route_cost[v] + risk - 0.05 * b.corridor[r], v))
+        out.sort()
+        return [v for _, v in out]
 
     def act(self, st):
         actions = []
@@ -609,6 +670,21 @@ class Agent:
                 actions.append("PLACE_TRACKS %d %d" % (x, y))
                 placed.add(i)
                 paint -= c
+
+        # --- no desperdiciar pintura ---------------------------------------
+        # El bot nº1 de la liga coloca sus 3 puntos TODOS los turnos (110 tracks
+        # en 40 turnos). Nosotros mediamos 32-44% desperdiciado en partidas
+        # reales: jugabamos con 2 puntos por turno contra sus 3.
+        if paint > 0 and FILL_IDLE_PAINT:
+            for i in self._frontier(st, placed):
+                if paint <= 0:
+                    break
+                c = st.board.cost[i]
+                if c <= paint:
+                    x, y = st.board.xy(i)
+                    actions.append("PLACE_TRACKS %d %d" % (x, y))
+                    placed.add(i)
+                    paint -= c
 
         # --- sabotaje -----------------------------------------------------
         r = self.disrupt.choose(st)
@@ -648,10 +724,7 @@ def build_agent(league):
     """Unico sitio donde se decide que estrategia corre cada liga."""
     if league == 1:
         return Agent(ConnectFirstStrategy(), NoDisrupt())
-    if league == 2:
-        return Agent(NetworkStrategy(), ValueDisrupt())
-    # 3 / "auto"
-    return Agent(NetworkStrategy(), ValueDisrupt())
+    return Agent(NetworkStrategy(), PreemptiveDisrupt())
 
 
 # --------------------------------------------------------------------------

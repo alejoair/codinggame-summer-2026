@@ -297,10 +297,12 @@ class Rules:
             if dist[s] != 0:
                 dist[s] = 0
                 heappush(pq, (0, s))
+        done = [False] * b.n
         while pq:
             d, u = heappop(pq)
-            if d > dist[u]:
+            if done[u]:
                 continue
+            done[u] = True          # nodo cerrado: no se vuelve a relajar nunca
             for v in b.nb[u]:
                 if st.inked[b.region[v]]:
                     continue
@@ -312,13 +314,13 @@ class Rules:
                     w = b.cost[v] + RISK_WEIGHT * st.instability[b.region[v]]
                     if ADJ_PENALTY:
                         adj = 0
-                        for u in b.nb[v]:
-                            if st.passable(u):
-                                adj += 1
+                        for nv in b.nb[v]:      # OJO: no reutilizar 'u' aqui,
+                            if st.passable(nv): # pisaria el nodo en expansion y
+                                adj += 1        # par[v] quedaria en un ciclo
                         if adj > 1:
                             w += ADJ_PENALTY * (adj - 1)
                 nd = d + w
-                if nd < dist[v]:
+                if not done[v] and nd < dist[v]:
                     dist[v] = nd
                     par[v] = u
                     heappush(pq, (nd, v))
