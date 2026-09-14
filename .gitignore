@@ -1,0 +1,12 @@
+# clon del referee Java oficial: trae su propio .git
+referee/
+
+# scratch de empaquetado y payloads
+.tmp/
+
+# estado de la tarea programada que vigila la liga
+.league-watch.json
+
+__pycache__/
+*.pyc
+logs/
