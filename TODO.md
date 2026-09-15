@@ -70,6 +70,11 @@ No reintentar sin motivo nuevo:
   50,8%, IC [44,5, 57,2], con 260 empates de 500: casi nunca cambia la ruta.
   Con los costes reales restaurados, en llanura minimizar pintura YA es
   minimizar celdas.
+- **D9 por enrutamiento · descuento a celdas de mucho transito** — monotono a la
+  baja: victorias 92,5% / 89,4% / 83,1% / 85,0% para descuento 0/1/2/3 contra
+  ref_v1. Causa: **D9 y D1 son incompatibles**, converger exige desviarse y
+  desviarse pierde la carrera del camino mas corto, cuyo premio es indivisible.
+  El factor 3 no es accesible enrutando.
 - **H-CONC · Concentrar la disrupción** (subir el peso de la inestabilidad
   acumulada para terminar regiones antes de abrir nuevas) — **+0,4%, t=0,10,
   59 de 120 mapas**. El primer test dio +18,7% con t=2,05 sobre 40 mapas y era

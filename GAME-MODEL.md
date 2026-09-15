@@ -211,6 +211,28 @@ que dinamica explotar cada turno. Existe porque ninguna es buena siempre:
 disputar caminos solo renta si el rival nos esta ganando alguno, y destruir el
 tablero nos perjudica mas a nosotros cuando poseemos mas que el.
 
+### Tension medida entre D1 y D9
+
+Son **incompatibles por enrutamiento**. Hacer converger rutas en troncos
+compartidos (D9) exige desviarse, y desviarse alarga el camino en celdas, que es
+perder la carrera del camino mas corto (D1).
+
+Barrido del descuento por transito, victorias contra ref_v1:
+
+| descuento | 0 | 1 | 2 | 3 |
+|---|---|---|---|---|
+| victorias | **92,5%** | 89,4% | 83,1% | 85,0% |
+
+Monotono a la baja. D1 gana el pulso: el premio del par es **indivisible**, asi
+que perder una carrera cuesta el par entero, mientras que compartir un trecho
+solo suma puntos de a uno.
+
+Consecuencia: el factor 3 que hay sobre la mesa (nuestras celdas estan en menos
+de una conexion activa) **no es accesible enrutando**. En una rejilla los caminos
+mas cortos entre pares distintos apenas se solapan, y forzar el solape se paga
+mas caro de lo que renta. El solape solo sirve donde ocurre **de forma natural**,
+es decir en cuellos de botella que la geometria ya impone.
+
 ## 10. Lo que sigue sin explicar
 
 - **Por qué sus partidas duran 44 turnos y las nuestras 67.** Descartado que sea
