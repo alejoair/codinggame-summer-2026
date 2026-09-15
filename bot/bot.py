@@ -44,6 +44,16 @@ TIE_JITTER = 0.0
 # Gastar siempre los 3 puntos: si el plan no los consume, extender la red.
 FILL_IDLE_PAINT = True
 
+# Dinamica 1: la carrera del camino mas corto. El par entero se lo lleva quien
+# tenga el camino MAS CORTO, no hay reparto. Medido en 24 partidas reales: el
+# ownership decide (0,43/0,32 ganando, 0,31/0,44 perdiendo) y el score del rival
+# es identico gane quien gane. Disputar un camino mueve puntos por partida DOBLE:
+# le quitamos los suyos y nos llevamos los nuestros.
+CONTEST = True
+CONTEST_MIN_GAIN = 3      # puntos/turno minimos de vuelco para que compense
+CONTEST_MAX_COST = 12     # pintura maxima, ~4 turnos de presupuesto
+CONTEST_PAIRS = 6         # pares candidatos que se examinan por turno
+
 PAINT_PER_TURN = 3
 DISRUPT_PER_TURN = 1
 INSTABILITY_THRESHOLD = 4
@@ -350,6 +360,77 @@ class Rules:
 
 
 # --------------------------------------------------------------------------
+# Director  -  QUE DINAMICA explotar en cada momento
+# --------------------------------------------------------------------------
+
+class Director:
+    """
+    Lee el estado del mundo y decide que dinamica del juego conviene explotar
+    este turno. Las dinamicas estan documentadas en GAME-MODEL.md; aqui solo se
+    deciden, no se ejecutan.
+
+    Existe porque ninguna dinamica es buena siempre:
+      - disputar caminos (D1) solo renta si el rival nos esta ganando alguno;
+      - la disrupcion (D2) es una carrera armamentistica que destruye el tablero
+        de los dos, y nos perjudica mas a nosotros cuando poseemos mas (D8);
+      - construir (D9) deja de pagar cuando la ventana se cierra (D3), y a
+        partir de ahi la pintura es desperdicio forzado (D10).
+    """
+
+    # Umbrales. Sacados de lo medido, no elegidos a ojo: las partidas reales
+    # duran 44-67 turnos y el pico de conexiones activas esta sobre el 36.
+    VENTANA_FIN = 0.75          # fraccion de regiones inkeadas que mata el tablero
+    HORIZONTE = 60              # turno a partir del cual construir casi no renta
+
+    def assess(self, st):
+        """Rasgos del mundo, todos baratos de calcular."""
+        b = st.board
+        inked = sum(1 for r in range(b.n_regions) if st.inked[r])
+        mias = suyas = activas = 0
+        for i in range(b.n):
+            c = st.act_count[i]
+            if not c:
+                continue
+            activas += 1
+            if st.mine(i):
+                mias += c
+            elif st.foes(i):
+                suyas += c
+        return {
+            "turno": st.turn,
+            "inked": inked / max(1, b.n_regions),
+            "celdas_activas": activas,
+            "renta_mia": mias,          # puntos/turno que sacamos ahora
+            "renta_suya": suyas,        # los que saca el rival
+            "voy_ganando": st.my_score >= st.foe_score,
+            "tablero_vivo": inked / max(1, b.n_regions) < self.VENTANA_FIN,
+        }
+
+    def modo_construccion(self, f):
+        """Que hacer con los 3 puntos de pintura."""
+        if not f["tablero_vivo"] or f["turno"] > self.HORIZONTE:
+            # D3/D10: la ventana se ha cerrado. Construir ya casi no paga, pero
+            # la pintura caduca igual, asi que se sigue por si acaso.
+            return "resto"
+        if f["renta_suya"] > f["renta_mia"]:
+            # D1: nos estan ganando las carreras de camino. Disputar rinde doble.
+            return "contest"
+        return "expand"                 # D9: componer renta cuanto antes
+
+    def agresividad_disrupcion(self, f):
+        """
+        Cuanto conviene destruir. D2 dice que no se puede dejar de disruptar,
+        pero D8 dice que destruir nos perjudica mas cuando poseemos mas: si
+        vamos por delante en renta, destruir el tablero es regalar el empate.
+        """
+        if f["renta_mia"] > 0 and f["renta_mia"] > 1.5 * f["renta_suya"]:
+            return 0.5                  # dominamos: preservar el tablero
+        if f["renta_suya"] > f["renta_mia"]:
+            return 1.5                  # nos gana: negar mas fuerte
+        return 1.0
+
+
+# --------------------------------------------------------------------------
 # Strategies  -  QUE construir
 # --------------------------------------------------------------------------
 
@@ -411,6 +492,7 @@ class NetworkStrategy(Strategy):
 
     def __init__(self):
         self.phase = "expand"
+        self.modo = "expand"        # lo fija el Director cada turno
 
     def plan(self, st):
         b = st.board
@@ -429,6 +511,15 @@ class NetworkStrategy(Strategy):
 
         main = max(towns_in_comp, key=comp_weight)
         main_towns = set(towns_in_comp[main])
+
+        # Disputar un camino rinde el doble que construir uno nuevo: le quitamos
+        # sus puntos Y nos llevamos los nuestros. Se evalua SIEMPRE, no solo al
+        # final: antes vivia en la fase 2 y casi nunca llegaba a ejecutarse.
+        if CONTEST and self.modo in ("contest", "resto"):
+            cells, gain, cost = self._contest(st)
+            if cells and gain >= CONTEST_MIN_GAIN and cost <= CONTEST_MAX_COST:
+                self.phase = "contest"
+                return cells
 
         unconnected = [t for t in b.towns if comp[t.idx] != main]
         if unconnected:
@@ -470,6 +561,58 @@ class NetworkStrategy(Strategy):
             return []
         path = Rules.rebuild_path(par, best.idx)
         return [i for i in path if st.buildable(i)]
+
+    def _contest(self, st):
+        """
+        Busca el par activo donde mas gana el rival y mira si podemos trazar una
+        ruta ESTRICTAMENTE mas corta hecha solo de celdas nuestras o libres. Al
+        ser mas corta pasa a ser la activa y el par cambia de dueno entero.
+
+        Devuelve (celdas_a_construir, vuelco_en_puntos_por_turno, coste).
+        """
+        b = st.board
+        foe = b.foe_id
+
+        # cuanto saca el rival de cada par activo
+        gains = {}
+        for i in range(b.n):
+            if st.act_count[i] == 0 or st.track[i] != foe:
+                continue
+            for tag in st.act_raw[i].split(","):
+                gains[tag] = gains.get(tag, 0) + 1
+        if not gains:
+            return None, 0, 0
+
+        mejor = (None, 0, 0)
+        mejor_ratio = 0.0
+        for tag, _ in sorted(gains.items(), key=lambda kv: -kv[1])[:CONTEST_PAIRS]:
+            try:
+                a, bb = (int(v) for v in tag.split("-"))
+            except ValueError:
+                continue
+            cur = Rules.train_bfs(st, b.towns[a].idx, b.towns[bb].idx)
+            if not cur:
+                continue
+            alt = self._shortest_without_foe(st, b.towns[a].idx, b.towns[bb].idx)
+            if not alt or len(alt) >= len(cur):
+                continue
+
+            quitado = sum(1 for c in cur if st.track[c] == foe)
+            mio_ahora = sum(1 for c in cur if st.mine(c))
+            # alt excluye rival y neutrales: toda celda no-town acabara siendo
+            # nuestra, sea porque ya lo es o porque la vamos a construir
+            mio_luego = sum(1 for c in alt if b.town_at[c] == -1)
+            vuelco = quitado + (mio_luego - mio_ahora)
+
+            celdas = [c for c in alt if st.buildable(c)]
+            coste = sum(b.cost[c] for c in celdas)
+            if not celdas or coste <= 0:
+                continue
+            ratio = vuelco / coste
+            if ratio > mejor_ratio:
+                mejor_ratio = ratio
+                mejor = (celdas, vuelco, coste)
+        return mejor
 
     # -- fase 2: robar caminos al rival -----------------------------------
 
@@ -554,6 +697,8 @@ class NoDisrupt(DisruptPolicy):
 
 
 class PreemptiveDisrupt(DisruptPolicy):
+    gain = 1.0
+
     """
     Politica copiada del comportamiento observado en el bot nº1 de la liga
     (Saelyos), leyendo su stdout real de una partida del arena.
@@ -579,6 +724,10 @@ class PreemptiveDisrupt(DisruptPolicy):
         # Sin tiempo material para completar un inkeo nuevo: solo rematar los ya
         # cebados, si queda alguno a 3.
         last_chance = st.turns_left() < INSTABILITY_THRESHOLD
+
+        # D8: si dominamos en renta, destruir el tablero nos cuesta mas que al
+        # rival. No se deja de disruptar (D2 lo prohibe), se hace mas exigente.
+        exigencia = 0.0 if self.gain >= 1.0 else 3.0
 
         best, best_score = None, -1e9
         for r in range(b.n_regions):
@@ -609,8 +758,8 @@ class PreemptiveDisrupt(DisruptPolicy):
                     score += 10.0
             score += 0.4 * inst     # aprovechar lo ya invertido por cualquiera
 
-            if score > best_score:
-                best_score, best = score, r
+            if score * self.gain > best_score and score > exigencia:
+                best_score, best = score * self.gain, r
 
         return best
 
@@ -623,6 +772,7 @@ class Agent:
     def __init__(self, strategy, disrupt_policy):
         self.strategy = strategy
         self.disrupt = disrupt_policy
+        self.director = Director()
         self.wasted = 0          # paint que no hemos sabido gastar en toda la partida
         self.spent = 0
         self.last_phase = None
@@ -658,6 +808,11 @@ class Agent:
         actions = []
 
         # --- construccion -------------------------------------------------
+        f = self.director.assess(st)
+        if hasattr(self.strategy, "modo"):
+            self.strategy.modo = self.director.modo_construccion(f)
+        self.disrupt.gain = self.director.agresividad_disrupcion(f)
+
         paint = PAINT_PER_TURN
         cells = self.strategy.plan(st)
         if REVERSE_PLAN:

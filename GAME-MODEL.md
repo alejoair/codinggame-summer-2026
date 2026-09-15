@@ -1,220 +1,223 @@
 # Qué clase de problema es Back Track King
 
-Definición formal del juego y mapeo a literatura de planificación de otras áreas.
-El objetivo del documento no es describir las reglas (eso está en
-[MECHANICS.md](MECHANICS.md)) sino **clasificar el problema** para saber en qué
-campo buscar algoritmos que ya estén resueltos.
+Segunda versión. La primera se escribió razonando sobre el referee; esta
+incorpora lo medido en partidas reales del arena y en el simulador, y **corrige
+varias cosas que la primera daba por buenas**.
+
+Reglas verificadas contra el código: [MECHANICS.md](MECHANICS.md).
+Cola de hipótesis y reglas del banco de pruebas: [TODO.md](TODO.md).
 
 ---
 
 ## 1. Definición formal
 
-### Estático (fijado en el turno 0)
+### Estático
 
 | | |
 |---|---|
-| Grafo | `G = (V, E)`, rejilla 4-conexa, `\|V\| = w·h ∈ [294, 600]` |
-| Coste de terreno | `c: V → {1, 2, 3}` (llanura / río / montaña) |
-| Particion en regiones | `R`, con `\|R\| ≈ 2w` ≈ 42–60, de ~7–10 celdas |
-| Towns | `T ⊂ V`, `\|T\| ∈ [4, 12]` |
-| Demanda | `D ⊆ T × T` **dirigida y no recíproca**, `\|D\| ≈ 25–45` |
+| Grafo | rejilla 4-conexa, `21 ≤ w ≤ 30`, `14 ≤ h ≤ 20` |
+| Terreno | `c: V → {1,2,3}` (llanura / río / montaña) |
+| Regiones | `\|R\| ≈ 2w` (47–60 medidas), de ~7–10 celdas, **4,7 vecinas de media** |
+| Towns | 4–12 |
+| Demanda | `D ⊆ T×T` dirigida y no recíproca, **12–52 pares** |
 
-### Dinámico
+### Acción por turno (simultánea)
 
-| | |
-|---|---|
-| Propiedad | `owner: V → {∅, 0, 1, N}` (libre / jugador / neutral) |
-| Inestabilidad | `ι: R → ℕ` |
-| Inkeadas | `K ⊆ R`, absorbente (una región inkeada no vuelve) |
+3 puntos de pintura **que caducan** + 1 punto de disrupción **que caduca**.
 
-### Acción (simultánea, ambos jugadores)
-
-Cada turno, cada jugador elige:
-- un multiconjunto de celdas `A ⊆ V` con `Σ_{v∈A} c(v) ≤ 3` — **no acumulable**,
-- opcionalmente una región `r ∈ R` a desestabilizar — **no acumulable**.
-
-### Transición
-
-1. Colocaciones **simultáneas**: si ambos eligen `v`, entonces `owner(v) = N`.
-2. Disrupciones: `ι(r) += 1`.
-3. Inkeo: `ι(r) ≥ 4 ⟹ r ∈ K`, y `owner(v) = ∅ ∀v ∈ r`.
-4. Puntuación.
-
-### Recompensa — **es un flujo, no un valor terminal**
+### Recompensa
 
 ```
-r_p(t) = Σ            |{ v ∈ SP_t(a,b) : owner(v) = p }|
-      (a,b) ∈ D
-      conectados
-
-Score_p = Σ_{t=1}^{100} r_p(t)
+Score_p = Σ_{t}  Σ_{(a,b) ∈ D activos en t}  |{ v ∈ SP_t(a,b) : dueño(v) = p }|
 ```
 
-donde `SP_t(a,b)` es el camino **más corto en número de celdas** en el subgrafo
-inducido por `{v : owner(v) ≠ ∅} ∪ T`, con desempate BFS en orden N,E,S,W.
-
-**Esta ecuación es el juego entero.** Todo lo demás se deduce de ella.
+`SP_t` = camino **más corto en número de celdas** sobre el grafo de raíles.
 
 ---
 
-## 2. Clasificación
+## 2. El régimen real — lo que la primera versión no sabía
 
-| Eje | Valor |
+La primera versión asumía 100 turnos y una red que, una vez construida, sigue
+rentando. **Las dos cosas son falsas.** Medido:
+
+| | Valor medido |
 |---|---|
-| Jugadores | 2 |
-| Movimientos | **simultáneos** |
-| Información | **perfecta** (no hay nada oculto) |
-| Azar | **ninguno** tras la generación del mapa |
-| Horizonte | finito, `T = 100` (en la práctica 40–80 por inkeo mutuo) |
-| Suma | los scores **no** son suma cero; la victoria **sí** |
-| Reversibilidad | **casi monótono**: colocar es irreversible; solo el inkeo resta |
-| Factor de ramificación | ~600 celdas, hasta 3 por turno ⇒ ~3,6·10⁷ combinaciones, × ~50 objetivos de disrupción |
+| Duración real de una partida | **44–67 turnos**, no 100 |
+| Pares deseados que llegan a estar activos | **10–23%** (12 de 52, 5 de 30) |
+| Pico de conexiones activas | turno **~36** |
+| Conexiones activas al final | **0** |
+| Regiones inkeadas al final | **43 de 60** |
+| Turnos finales sin puntuar nada | **el último ~25%** |
 
-Dos consecuencias metodológicas inmediatas:
+Traza real (semilla 4242, 52 pares deseados):
 
-- **La búsqueda en el árbol de juego no es viable.** Ni con poda. El espacio de
-  acciones por turno ya es intratable, y el horizonte es de 100 turnos.
-- **La monotonía es explotable.** Como el estado casi solo crece, un *plan*
-  construido de antemano sigue siendo casi válido turnos después. Esto favorece
-  planificación constructiva + búsqueda local **sobre el plan**, no sobre el estado.
+```
+turno 12 → 10/52 activas, +110 puntos/turno
+turno 36 → 12/52 activas, +188 puntos/turno   ← pico
+turno 60 →  5/52 activas,  +66 puntos/turno
+turno 72 →  0/52 activas,    0 puntos/turno   ← tablero muerto
+turno 94 →  0/52 activas, 43 de 60 regiones inkeadas
+```
 
----
+### P0 — Hay una VENTANA de puntuación, y se cierra
 
-## 3. Las cinco propiedades que de verdad mandan
+El juego no es "construir una red y cosecharla". Es **acumular puntos antes de
+que el tablero muera**. La ventana útil va de ~turno 10 a ~turno 60, y la
+destrucción es **mutua, acumulativa e irreversible**: los dos jugadores gastan
+1 punto de disrupción por turno y ninguno puede devolver una región inkeada.
 
-### P1 — La recompensa es una latencia acumulada
-
-Un par conectado en el turno `τ` aporta `(100 − τ) × (celdas propias en su camino)`.
-El objetivo no es "construir la red más barata" sino **minimizar el tiempo hasta
-que cada demanda empieza a pagar**, ponderado por lo que paga.
-
-### P2 — Ingreso no almacenable
-
-3 puntos por turno, se pierden si no se usan. El presupuesto total no es un
-número: es un **caudal**. Desperdiciar 1 punto en el turno 10 no cuesta 1 punto,
-cuesta todo lo que ese punto habría rentado durante 90 turnos.
-
-### P3 — La recompensa depende del camino más corto, que el rival puede redirigir
-
-Poseer celdas es **necesario pero no suficiente**. Basta con que alguien
-construya un camino más corto para que el tuyo deje de pagar, entero y de golpe.
-
-Corolario incómodo y poco intuitivo: **añadir raíles propios puede reducir tu
-propia puntuación**. Si al conectar un town nuevo creas un atajo entre dos towns
-que ya estaban conectados, acortas su camino activo y pierdes las celdas que
-quedan fuera. Es un efecto tipo **paradoja de Braess** dentro de tu propia red.
-
-### P4 — `DISRUPT` es interdicción con umbral y daño colateral
-
-Presupuesto 1/turno, umbral 4, destruye raíles de **ambos**, e irreversible.
-No es "hacer daño": es **elegir un corte**.
-
-### P5 — Movimientos simultáneos con colisión destructiva
-
-Si los dos colocan en la misma celda, el resultado (`neutral`) **no puntúa para
-nadie**. Una política determinista es explotable: un rival que prediga tu ruta
-puede neutralizarla al mismo precio que te cuesta a ti construirla.
+Corolario que duele: en el último cuarto de partida seguimos gastando los 3
+puntos de pintura colocando celdas que están en **cero** conexiones activas.
 
 ---
 
-## 4. Mapeo a literatura
+## 3. Descomposición del objetivo
 
-### P1 → Minimum Latency Problem / Traveling Repairman
+```
+Score ≈ Σ_t  (pares activos en t) × (longitud media del camino) × (fracción nuestra)
+```
 
-El objetivo `Σ_t Σ_demandas` es exactamente una **latencia acumulada**, no un
-coste de recorrido. Es la diferencia entre TSP (minimizar el tour) y MLP
-(minimizar la espera media de los clientes), y **la solución óptima es distinta**.
+Los cuatro factores, con lo medido:
 
-- NP-duro **incluso en métricas de árbol**, y sin PTAS salvo P=NP.
-- Mejor aproximación conocida para un agente: **3,59α**
-  ([Fakcharoenphol et al.](https://arxiv.org/pdf/1411.4573)); versión multi-agente 8,497α.
-- Los algoritmos buenos no minimizan coste: hacen **greedy por ratio** o usan
-  subrutinas de *k-MST* (árbol más barato que abarca `i` vértices), sirviendo
-  primero racimos densos y baratos.
+| Factor | Nosotros | Comentario |
+|---|---|---|
+| Pares activos | 10–23% de los deseados, **decayendo** | el factor que más margen tiene |
+| Longitud del camino | — | no medido aún |
+| **Fracción propia (ownership)** | **0,43 ganando / 0,31 perdiendo** | **decide las partidas** |
+| Turnos activos | ventana de ~50, no 100 | |
 
-> **H1.** Ordenar la construcción por `Δ(puntos/turno) × turnos_restantes / coste`
-> en vez de por coste. Hoy usamos distancia manhattan como proxy del valor y no
-> multiplicamos por el horizonte restante.
-
-### P2 → Optimización de build orders en RTS
-
-Es literalmente el mismo problema: un caudal de recursos no almacenable que hay
-que convertir en estructuras que rinden de forma continuada.
-
-- [Churchill & Buro, *Build Order Optimization in StarCraft*, AIIDE 2011](https://davechurchill.ca/publications/pdf/aiide11-bo.pdf):
-  **branch & bound en profundidad** sobre secuencias concurrentes de acciones,
-  con abstracción del ingreso, macro-acciones, limitación de anchura y cotas
-  inferiores admisibles. Planes casi óptimos **en tiempo real**.
-- La primera regla de oro de ese campo: **no dejar ingreso ocioso jamás**.
-
-> **H2.** Tratar el orden de aristas del árbol como un problema de scheduling y
-> hacer *beam search* o branch & bound sobre él, evaluando cada plan con un
-> simulador rápido hasta el turno 100. Es la palanca de mayor techo.
->
-> **H2b (barata).** No dejar nunca paint sin gastar. Medimos **32% desperdiciado**
-> en partida real: es una violación directa de la regla de oro del campo.
-
-### P3 → Interdicción de camino más corto y juegos de enrutamiento
-
-- [Israeli & Wood, *Shortest-Path Network Interdiction*](https://apps.dtic.mil/sti/pdfs/ADA490133.pdf):
-  el marco estándar para "cambiar el camino que elige el otro".
-- Nuestro caso es el **dual**: no alargamos su camino, creamos uno más corto que
-  pasa por celdas nuestras y se lo apropiamos entero.
-
-> **H3.** Verificar antes de construir que la ruta nueva **no acorta** ningún
-> camino activo propio. Mantener la red como **árbol**. Hoy no lo comprobamos
-> en ningún sitio, y `_steal` crea ciclos por diseño. Es concreto y barato.
-
-### P4 → Network interdiction / Critical Node Detection
-
-- [Survey de modelos de interdicción](https://www.researchgate.net/publication/333849206_A_Survey_of_Network_Interdiction_Models_and_Algorithms);
-  variante **distance-based CNDP**, que mide el daño por distancias entre pares
-  y no por número de nodos — que es justo nuestra métrica.
-- El modelo **trilevel defender-attacker-defender** (Brown, Carlyle, Salmeron & Wood)
-  añade la capa defensiva: fortificar. Nuestro equivalente es enrutar por
-  regiones con town, que son **inmunes** al inkeo.
-
-> **H4.** Elegir el objetivo de disrupción **simulando la eliminación** y
-> recalculando los caminos activos de ambos, en vez de sumar `act_count`. El proxy
-> actual ignora el reenrutado: si existe una ruta alternativa, inkear le cuesta al
-> rival mucho menos de lo que el proxy promete.
-
-### P5 → Juegos de movimiento simultáneo
-
-Requieren estrategias mixtas; las políticas puras deterministas son explotables
-(SM-MCTS desacoplado, regret matching). Nuestro `BREAK_SYMMETRY` es una versión
-tosca de esto.
-
-> **H5.** Aleatorizar los desempates con semilla propia, para que un rival que
-> calcule nuestra misma ruta no pueda neutralizarnos sistemáticamente.
+Cada celda nuestra aporta solo **0,2–0,6 puntos por turno**, o sea que está en
+menos de una conexión activa de media. Si estuvieran en tres, puntuaríamos el
+triple con la misma pintura.
 
 ---
 
-## 5. Hipótesis ordenadas por (valor esperado / esfuerzo)
+## 4. El núcleo competitivo: la carrera del camino más corto
 
-| | Hipótesis | Origen | Coste | Techo |
-|---|---|---|---|---|
-| **H3** | No crear atajos que acorten caminos activos propios (mantener árbol) | Braess / interdicción | bajo | medio-alto |
-| **H2b** | No dejar paint ocioso nunca | build orders RTS | bajo | medio |
-| **H4** | Objetivo de disrupción por simulación real del corte | CNDP | medio | medio |
-| **H1** | Greedy por ratio con valor = Δpuntos/turno × horizonte | MLP | medio | medio-alto |
-| **H5** | Desempates aleatorizados | juegos simultáneos | bajo | bajo |
-| **H2** | Beam search / B&B sobre el orden de construcción | Churchill & Buro | alto | **alto** |
+24 partidas reales del arena, separadas en 15 victorias y 9 derrotas:
 
-**H3 es la que más me interesa** porque no es una mejora incremental: si el bot
-se está autolesionando creando atajos, eso es un defecto, no una carencia. Y sale
-directamente de la propiedad P3, que ninguna intuición sobre "construir barato"
-te hace ver.
+| | Ganadas | Perdidas |
+|---|---|---|
+| Nuestro score | 2.772 | **1.115** |
+| **Su score** | **2.019** | **2.046** |
+| Ownership nuestro / suyo | 0,43 / 0,32 | **0,31 / 0,44** |
+| Puesto del rival en el ranking | 17,1 | 16,2 |
+
+**La puntuación del rival es idéntica gane quien gane.** La que se desploma es la
+nuestra, y el ownership se invierte como un espejo. No perdemos contra rivales
+mejores.
+
+> **P3 (confirmada empíricamente).** No se pierde porque te ataquen: se pierde
+> porque tus celdas dejan de estar en el camino activo. La conexión activa es la
+> **más corta en celdas**, y quien la tiene se lleva el par **entero**.
+
+Consecuencia directa y ya cobrada: penalizar río y montaña para rodearlos
+(`TERRAIN_AVOID=(1,3,5,5)`) era una **regresión**, porque alarga el camino en
+celdas y regala el par a quien cruza recto. Aislado: +20,6% de score al quitarlo
+(t=3,29) y 54,2% de victorias cara a cara sobre 800 partidas.
 
 ---
 
-## 6. Referencias
+## 5. Hechos estructurales medidos
 
-- [LP-based approximation for multi-vehicle minimum latency](https://arxiv.org/pdf/1411.4573)
-- [PTAS for traveling repairman and minimum latency problems](https://arxiv.org/pdf/1307.4289)
-- [Churchill & Buro, Build Order Optimization in StarCraft (AIIDE 2011)](https://davechurchill.ca/publications/pdf/aiide11-bo.pdf)
-- [Robust Continuous Build-Order Optimization (IEEE CoG 2019)](https://ieee-cog.org/2019/papers/paper_85.pdf)
-- [Israeli & Wood, Shortest-Path Network Interdiction](https://apps.dtic.mil/sti/pdfs/ADA490133.pdf)
-- [A Survey of Network Interdiction Models and Algorithms](https://www.researchgate.net/publication/333849206_A_Survey_of_Network_Interdiction_Models_and_Algorithms)
-- [Maximum Shortest Path Interdiction by Upgrading Nodes on Trees](https://arxiv.org/html/2504.05190)
-- Takahashi & Matsuyama (1980), heurística de Steiner por caminos mínimos — ver [STRATEGY.md](STRATEGY.md)
+| Hecho | Medición | Implicación |
+|---|---|---|
+| Ninguna región es punto de articulación | **0 de 533** en 12 mapas | el grafo de regiones es plano y 2-conexo: **una** región nunca corta el mapa |
+| Aislar un town siempre es posible | **0 de 121** imposibles; 18,5 puntos de disrupción (4,6 regiones) | la regla "dos regiones vecinas nunca tienen ambas town" garantiza que el anillo es disruptable |
+| …pero es autolesivo | **−62,7%, t=−7,30** | nuestro ownership (0,43) es mayor que el suyo (0,32): matar pares nos quita más a nosotros |
+| Presupuesto de disrupción | ~50 puntos = 12 regiones inkeables | |
+| Presupuesto de cómputo | usamos **1,7 ms de 50**; el nº1 usa 28,6 | 30× sin tocar |
+
+> **Regla general que sale de aquí:** cualquier estrategia que **destruya valor
+> compartido** nos perjudica más a nosotros. La disrupción debe destruir
+> **tracks del rival**, no el mapa.
+
+---
+
+## 6. Por qué los proxies ganan a la evaluación exacta
+
+Sustituir el proxy de distancia manhattan por una evaluación **exacta a un paso**
+(simular la red y contar celdas propias que puntuarían) midió **−39,6%, t=−5,15**.
+
+No es un fallo de implementación, es la estructura del problema: la recompensa es
+una **latencia acumulada** (P1), no una tasa instantánea. Enganchar un town
+lejano rinde poco *ahora* y abre la red para todo lo que viene después. El proxy
+manhattan sobrevalora los pares grandes y con eso captura ese valor futuro por
+accidente; la evaluación exacta lo destruye.
+
+> Cualquier uso del presupuesto de cómputo **tiene que simular hasta el
+> horizonte** (~50 turnos). Evaluar mejor un solo paso vuelve a fallar.
+
+---
+
+## 7. Literatura aplicable
+
+- **P0/P1 · Latencia acumulada** → Minimum Latency Problem / Traveling Repairman.
+  NP-duro incluso en árboles, sin PTAS, mejor aproximación 3,59α. Los algoritmos
+  buenos hacen greedy **por ratio**, no por coste.
+  [LP-based approximation](https://arxiv.org/pdf/1411.4573) ·
+  [PTAS para MLP](https://arxiv.org/pdf/1307.4289)
+- **P2 · Ingreso no almacenable** → *build order optimization* en RTS.
+  [Churchill & Buro, AIIDE 2011](https://davechurchill.ca/publications/pdf/aiide11-bo.pdf).
+  Regla de oro del campo: no dejar ingreso ocioso. Matiz nuestro: gastar en
+  celdas que no puntúan **no es** cumplirla.
+- **P3 · Carrera del camino más corto** → interdicción de camino mínimo
+  ([Israeli & Wood](https://apps.dtic.mil/sti/pdfs/ADA490133.pdf)); nuestro caso
+  es el dual.
+- **P4 · Disrupción** → *network interdiction* / *critical node detection*
+  ([survey](https://www.researchgate.net/publication/333849206_A_Survey_of_Network_Interdiction_Models_and_Algorithms)).
+  Medido: cortar el mapa exige un **conjunto**, no un nodo — y encima no compensa.
+- **Meta de competición** → liga con *exploiters* estilo
+  [AlphaStar](https://deepmind.google/blog/alphastar-mastering-the-real-time-strategy-game-starcraft-ii/);
+  explotación segura de rivales subóptimos
+  ([safe opponent exploitation](https://www.researchgate.net/publication/372584179_Safe_Opponent_Exploitation_For_Epsilon_Equilibrium_Strategies)).
+
+---
+
+## 8. Principios corregidos
+
+1. **Maximizar el ownership de los caminos activos**, no el tamaño de la red.
+   Es lo único que separa nuestras victorias de nuestras derrotas.
+2. **Caminos cortos en celdas.** Rodear terreno caro pierde la carrera.
+3. **La ventana se cierra hacia el turno 60.** Todo lo que se construya después
+   es casi seguro pintura tirada, y todo lo construido antes rinde el doble de
+   lo que parece.
+4. **No destruir valor compartido.** Sacamos más de cada par que el rival.
+5. **Una celda vale por el número de conexiones que la usan.** Las nuestras están
+   en menos de una de media: ahí hay un factor 3 sin tocar.
+6. **Cualquier evaluación debe llegar al horizonte**, no a un paso.
+
+---
+
+## 9. Dinamicas: cuales explotamos
+
+Las mecanicas son las reglas; las dinamicas son lo que emerge al jugarlas.
+
+| # | Dinamica | Explotada | Evidencia |
+|---|---|---|---|
+| 1 | Carrera del camino mas corto (premio indivisible) | parcial | `_contest`, ahora activado por el Director cuando el rival nos gana renta |
+| 2 | Espiral de destruccion mutua | si | disruptamos siempre; quitarlo baja del 93,8% al 35,6% de victorias |
+| 3 | La ventana de puntuacion se cierra | parcial | el Director conoce `HORIZONTE=60` y la salud del tablero |
+| 4 | Aniquilacion entre estrategias parecidas | no, la sufrimos | 12 celdas neutras por partida; 600 empates a cero en espejo |
+| 5 | Parasitismo de red | si, pasivo | el dijkstra da coste 0 a railes de cualquiera |
+| 6 | Auto-sabotaje por atajo (Braess) | no | H3 implementado pero sin validar |
+| 7 | Santuarios (regiones con town, inmunes) | no | |
+| 8 | Asimetria del incentivo destructor | **si** | el Director baja la disrupcion cuando dominamos en renta: +622 de margen, t=5,56 |
+| 9 | El rico se hace mas rico | apenas | cada celda nuestra da 0,2-0,6 puntos/turno: esta en menos de una conexion |
+| 10 | Desperdicio terminal forzado | no | |
+
+El **Director** (`bot/bot.py`) es la capa que lee el estado del mundo y decide
+que dinamica explotar cada turno. Existe porque ninguna es buena siempre:
+disputar caminos solo renta si el rival nos esta ganando alguno, y destruir el
+tablero nos perjudica mas a nosotros cuando poseemos mas que el.
+
+## 10. Lo que sigue sin explicar
+
+- **Por qué sus partidas duran 44 turnos y las nuestras 67.** Descartado que sea
+  porque corten el mapa (§5). Podría ser una propiedad del emparejamiento —dos
+  bots que destruyen mucho acaban antes— y no del jugador.
+- **`PreemptiveDisrupt` nunca se aisló.** Entró en el paquete que subió el score
+  un 41% junto a `FILL_IDLE_PAINT` y `TERRAIN_AVOID`, y este último resultó ser
+  una regresión. No sabemos cuál de los tres aportaba. **Es el próximo test
+  obligatorio**, sobre todo sabiendo que la disrupción cierra la ventana de
+  puntuación de ambos.

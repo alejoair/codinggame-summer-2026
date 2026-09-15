@@ -57,6 +57,8 @@ def main():
     ap.add_argument("--b", default="python bot/bot_v2.py")
     ap.add_argument("--env-b", default="", help='p.ej. "BTK_FACTOR=1.4 BTK_SAFE=0"')
     ap.add_argument("--opp", default="random")
+    # NOTA: este banco compara MARGEN. Para cambios que afectan sobre todo a la
+    # tasa de victorias, contrastar ademas con sim/arena.py.
     ap.add_argument("--games", type=int, default=30)
     ap.add_argument("--seed", type=int, default=1000)
     args = ap.parse_args()
@@ -78,12 +80,12 @@ def main():
                 break
             except ValueError:
                 continue
-        sa, _ = run_one(gmap, args.a, args.opp, args.seed + g)
+        sa, sa_opp = run_one(gmap, args.a, args.opp, args.seed + g)
         # el entorno del bot B se inyecta en el proceso hijo via os.environ
         old = {k: os.environ.get(k) for k in env_b}
         os.environ.update(env_b)
         try:
-            sb, _ = run_one(gmap, args.b, args.opp, args.seed + g)
+            sb, sb_opp = run_one(gmap, args.b, args.opp, args.seed + g)
         finally:
             for k, v in old.items():
                 if v is None:
@@ -93,13 +95,17 @@ def main():
         if sa < 0 or sb < 0:
             print("mapa %d: descalificacion, descartado" % g)
             continue
-        d = sb - sa
+        # MARGEN, no score propio. El juego se gana por DIFERENCIA: un cambio
+        # puede subir mucho nuestro score y aun asi perder si sube mas el del
+        # rival. Medir solo el propio dio +35,8% a quitar la disrupcion, cuando
+        # por victorias era 35,6% frente a 93,8%: justo lo contrario.
+        d = (sb - sb_opp) - (sa - sa_opp)
         diffs.append(d)
-        a_tot += sa
-        b_tot += sb
+        a_tot += sa - sa_opp
+        b_tot += sb - sb_opp
         if d > 0:
             b_better += 1
-        print("mapa %2d   A=%-7d B=%-7d  dif=%+d" % (g, sa, sb, d))
+        print("mapa %2d   margenA=%-7d margenB=%-7d  dif=%+d" % (g, sa - sa_opp, sb - sb_opp, d))
 
     n = len(diffs)
     if n < 2:
@@ -113,8 +119,7 @@ def main():
     print("\n" + "=" * 60)
     print("A: %s" % args.a)
     print("B: %s %s" % (args.b, args.env_b))
-    print("medias:  A=%.0f   B=%.0f   (%+.1f%%)"
-          % (a_tot / n, b_tot / n, 100.0 * (b_tot - a_tot) / max(1, a_tot)))
+    print("margen medio (propio - rival):  A=%.0f   B=%.0f" % (a_tot / n, b_tot / n))
     print("B gana en %d de %d mapas" % (b_better, n))
     print("diferencia pareada: %+.0f  (sd=%.0f, se=%.0f, t=%.2f, n=%d)"
           % (mean, sd, se, t, n))
