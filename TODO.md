@@ -66,12 +66,37 @@ No reintentar sin motivo nuevo:
   mecanismo que decia atacar: alarga las partidas (80,3 turnos frente a 78,8)
   en vez de acortarlas. Causa medida: **ninguna region individual es punto de
   articulacion** (0 de 533). Reformulada como H-SEPARATOR.
+- **Desempate por numero de celdas** (`HOP_PENALTY` sobre `route_cost` x10) —
+  50,8%, IC [44,5, 57,2], con 260 empates de 500: casi nunca cambia la ruta.
+  Con los costes reales restaurados, en llanura minimizar pintura YA es
+  minimizar celdas.
 - **H-CONC · Concentrar la disrupción** (subir el peso de la inestabilidad
   acumulada para terminar regiones antes de abrir nuevas) — **+0,4%, t=0,10,
   59 de 120 mapas**. El primer test dio +18,7% con t=2,05 sobre 40 mapas y era
   ruido. Que inkeemos 15,6 regiones frente a las 10,4 del nº1 sigue siendo
   cierto, pero concentrar sin mas no es la respuesta: apunta a H-CUT, que cambia
   el CRITERIO de eleccion en vez de la reparticion.
+
+## Hallazgo clave: por que perdemos
+
+Separando 24 partidas reales del arena en 15 victorias y 9 derrotas:
+
+| | Ganadas | Perdidas |
+|---|---|---|
+| Nuestro score | 2.772 | 1.115 |
+| **Su score** | **2.019** | **2.046** |
+| Nuestro ownership | 0,43 | 0,31 |
+| Su ownership | 0,32 | 0,44 |
+| Score del rival en el ranking | 17,1 | 16,2 |
+
+**Su puntuacion es identica gane quien gane. La que se desploma es la nuestra.**
+Y el discriminador es el ownership, que se invierte como un espejo. Tampoco
+perdemos contra rivales mejores.
+
+No perdemos porque nos ataquen: perdemos porque **nuestras celdas dejan de estar
+en los caminos activos**. Es la propiedad P3 de GAME-MODEL.md — la conexion
+activa es la mas CORTA en celdas, y quien la tiene se lleva el par entero.
+Todo lo que acorte nuestros caminos, o alargue los suyos, ataca la causa real.
 
 ## Validadas y en producción
 

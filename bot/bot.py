@@ -51,9 +51,13 @@ MAX_TURNS = 100
 
 PLAINS, RIVER, MOUNTAIN, POI = 0, 1, 2, 3
 COST = (1, 2, 3, 3)
-# Coste solo para ELEGIR ruta: rio y montana penalizados por encima de su precio
-# real, para rodearlos en vez de pagarlos. Ver Board.route_cost.
-TERRAIN_AVOID = (1, 3, 5, 5)
+# Coste para ELEGIR ruta. Estuvo en (1,3,5,5) para rodear rio y montana, imitando
+# al nº1 de la liga, y era una REGRESION: rodear alarga el camino en CELDAS, y la
+# conexion activa es la mas corta en celdas, asi que regalabamos el par al rival
+# que cruzaba en linea recta. Medido al aislarlo: +20,6% de score (t=3,29, n=120)
+# y 54,2% de victorias cara a cara, IC95 [50,3%, 58,0%] sobre 800 partidas.
+# Entro en el mismo paquete que subio el score un 41% y nunca lo ablacione.
+TERRAIN_AVOID = (1, 2, 3, 3)
 
 TRACK_NONE, TRACK_NEUTRAL = -1, 2
 INF = float("inf")
