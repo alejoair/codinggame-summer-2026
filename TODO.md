@@ -25,23 +25,15 @@ Aprendidas a base de equivocarse durante la sesión. No saltárselas:
 
 ## Pendientes, por orden
 
-- [ ] **H-SEPARATOR · Inkear un CONJUNTO de regiones que forme un separador.**
-      Sucesora de H-CUT, que fracaso por un motivo medido: en 12 mapas, **0 de
-      533 regiones disruptables parte el grafo al eliminarla**. El grafo de
-      regiones es plano tipo rejilla, con 4,7 vecinas de media, o sea
-      practicamente 2-conexo: ninguna region es punto de articulacion, y una
-      evaluacion de UN paso nunca puede ver un corte.
-      El mapa solo se parte inkeando VARIAS regiones a la vez. Eso es elegir un
-      conjunto separador, no un maximo local: es el problema de *critical node
-      detection* / interdiccion de red que ya esta en GAME-MODEL.md P4.
-      Implementar: buscar el separador de coste minimo (numero de regiones, a 4
-      puntos de disrupcion cada una) que aisle towns cuyos pares favorezcan al
-      rival, y luego COMPROMETERSE a inkearlo entero. Tenemos ~50 puntos de
-      disrupcion por partida = 12 regiones, asi que un separador de 3-5 regiones
-      es asequible.
-- [ ] **H-COMPUTE · Usar el presupuesto de cómputo.** Gastamos ~1,7 ms de los 50;
-      Saelyos gasta 28,6. Hay 30× sin tocar. Es donde cabe el beam search sobre
-      el orden de construcción (Churchill & Buro, ver GAME-MODEL.md §H2).
+- [ ] **H-COMPUTE · Beam search sobre el ORDEN de construccion, evaluando hasta
+      el FINAL de la partida.** Gastamos ~1,7 ms de los 50; el nº1 gasta 28,6.
+      Aviso caro, ya pagado: evaluar exactamente UN paso (simular la red y contar
+      celdas propias que puntuarian al enganchar cada town) dio **-39,6%,
+      t=-5,15**. Fue peor que el proxy manhattan porque es MIOPE: ignora que
+      enganchar un town lejano abre la red para los siguientes. La recompensa de
+      este juego es una latencia acumulada (GAME-MODEL.md P1), no una tasa
+      instantanea, asi que la evaluacion TIENE que simular hasta el horizonte
+      (~50 turnos, no 100). Cualquier atajo que evalue un paso volvera a fallar.
 - [ ] **H-CLOSE · Cerrar pronto yendo por delante.** Nuestras partidas son las más
       largas de los cuatro perfiles medidos. Acabar antes congela la victoria.
       Ligado a H-CUT.
@@ -60,6 +52,16 @@ No reintentar sin motivo nuevo:
 - **`TIE_JITTER`** — 35,8% de victorias sobre 600 partidas, IC [31,9, 39,7].
 - **Cacheo de plan** y **preferir regiones con town** — no concluyentes, medidos
   además en el régimen equivocado.
+- **H-SEPARATOR · Asediar un town (inkear todo su anillo para aislarlo)** —
+  **-62,7%, t=-7,30, gana 10 de 120 mapas**. Catastrofico, y la causa estaba en
+  nuestros propios datos: nuestro ownership medio es 0,41 y el del rival 0,35,
+  o sea que sacamos MAS partido de cada par que ellos. Matar pares enteros es
+  autolesivo. Ademas se pierden los tracks propios del anillo.
+  Corolario general, vale para futuras ideas: **cualquier estrategia que
+  destruya valor compartido nos perjudica mas a nosotros**. La disrupcion tiene
+  que ir a destruir TRACKS DEL RIVAL, no a destruir el mapa.
+  Deja ademas sin explicar por que sus partidas duran 44 turnos y las nuestras
+  67: no es porque ellos corten.
 - **H-CUT · Corte por region unica** — +1,3%, t=0,31, n=120; y contra el
   mecanismo que decia atacar: alarga las partidas (80,3 turnos frente a 78,8)
   en vez de acortarlas. Causa medida: **ninguna region individual es punto de
